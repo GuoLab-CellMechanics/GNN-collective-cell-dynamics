@@ -12,24 +12,29 @@ import scipy.io
 
 
 
-# calculate length scale across the whole dataset, for normalization
-def getLengthScale(directory_train, directory_test):
+'''
+Normalization
+'''
+def getLengthScale(directory):
+    #
+    foldernames = []
+    for foldername in os.listdir(directory):
+        if not foldername.startswith('.'):
+            print(foldername)
+            foldernames.append(os.path.join(directory, foldername))
+    
     filenames = []
-    for filename in os.listdir(directory_train):
-        if not filename.startswith('.'):
-            filenames.append(os.path.join(directory_train, filename))
-            print(filename)
+    for foldername in foldernames:
+        for filename in os.listdir(foldername):
+            if not filename.startswith('.'):
+                filenames.append(os.path.join(foldername, filename))
+                print(filename)
 
-    for filename in os.listdir(directory_test):
-        if not filename.startswith('.'):
-            filenames.append(os.path.join(directory_test, filename))
-            print(filename)
-
+    print(len(filenames))
     N_lst=[]
     for filename in filenames:
         matdata = scipy.io.loadmat(filename)
         N_lst.append(len(matdata['cy']))
-        print(len(matdata['cy']))
     
     # calculate lc
     N_avg = np.array(N_lst).mean()
@@ -38,15 +43,17 @@ def getLengthScale(directory_train, directory_test):
     lc = np.sqrt(Area_avg)
     return lc
 
-
-lc = getLengthScale(directory_train = "processed/train", directory_test = "processed/test")
+# calculate the length scale for normalization
+lc = getLengthScale(directory = "processed")
 print('characteritic length for normalization',lc)
 print('normalized x dimension', 691/lc)
 print('normalized y dimension',516/lc)
 
 
-
-# Voronoi tessellation
+'''
+Construct dataset
+'''
+# tessellation
 def calculate_Voronoi(points):
     vor = Voronoi(points)
     area_lst = np.zeros(len(points))
@@ -65,9 +72,14 @@ def calculate_Voronoi(points):
 
                 # Check if any vertex is outside the ROI
                 polygon_array = np.array(polygon)
-                # ROI x 4-22, y 3-16
-                if np.all(polygon_array[:,0] > 4.0) and np.all(polygon_array[:,0] < 22.0)\
-                        and np.all(polygon_array[:,1] > 3.0) and np.all(polygon_array[:,1] < 16.0):
+                
+                # Select ROI : x 2-30, y 2-22
+                x_min = 2.0
+                x_max = 30.0
+                y_min = 2.0
+                y_max = 22.0
+                if np.all(polygon_array[:,0] > x_min) and np.all(polygon_array[:,0] < x_max)\
+                        and np.all(polygon_array[:,1] > y_min) and np.all(polygon_array[:,1] < y_max):
                     area_lst[point_idx] = area
                     perimeter_lst[point_idx] = perimeter
                     voronoi_polygons[point_idx] = poly_shape  # Store the valid polygon
@@ -80,8 +92,7 @@ def calculate_Voronoi(points):
 
     return area_lst, perimeter_lst, voronoi_polygons, is_within_threshold_lst
 
-
-# Define dataset
+#
 def Custom_dataset(filepath0, lc):
     
     # load matlab file
@@ -97,9 +108,9 @@ def Custom_dataset(filepath0, lc):
     edge_list = tri.simplices
     edges = set()
     for simplex in tri.simplices:
-        # Vertices
+        # Extract vertices
         v1, v2, v3 = simplex
-        # Edges
+        # Create edges
         edges.add((v1, v2))
         edges.add((v2, v3))
         edges.add((v3, v1))
@@ -132,11 +143,10 @@ def Custom_dataset(filepath0, lc):
 
     # get edge list
     edge_list = np.array(list(filtered_edges))
-    edge_list  = np.transpose(edge_list)
+    edge_list = np.transpose(edge_list)
+
     edge_index = torch.tensor(edge_list, dtype=torch.long)
 
-    # here we still save the edge length as edge attribute in case you want to have a try in include it in the model.
-    # Note that edge attribute is not enabled in the model in this repository
     edge_attr = ((filtered_node_sublist[edge_index[0,:],0] - filtered_node_sublist[edge_index[1,:],0])**2\
                 +(filtered_node_sublist[edge_index[0,:],1] - filtered_node_sublist[edge_index[1,:],1])**2)**0.5
     edge_attr = torch.tensor(edge_attr, dtype=torch.float)
@@ -148,85 +158,41 @@ def Custom_dataset(filepath0, lc):
 
     return data
 
-# iterate over the files in the folder
+
+#
 def MainGetData(directory,lc):
-    filenames = []
-    for filename in os.listdir(directory):
-        if not filename.startswith('.'):
-            filenames.append(os.path.join(directory, filename))
-    #         print(filename)
+    foldernames = []
+    for foldername in os.listdir(directory):
+        if not foldername.startswith('.'):
+            print(foldername)
+            foldernames.append(os.path.join(directory, foldername))
 
-    data_list = []
-    for filename in filenames:
-        print(filename)
-        data = Custom_dataset(filename,lc)
-        data_list.append(data)
+    pos_data_list = []
+    for foldername in foldernames:
+        # get all the filenames in a folder
+        filenames = []
+        for filename in os.listdir(foldername):
+            if not filename.startswith('.'):
+                filenames.append(os.path.join(foldername, filename))
 
-    return data_list
+        # Append the data
+        data_list = []
+        for filename in filenames:
+            print(filename)
+            data = Custom_dataset(filename,lc)
+            data_list.append(data)
 
-
-# get data lists
-data_list_train = MainGetData(directory = "processed/train", lc=lc)
-data_list_test = MainGetData(directory = "processed/test", lc=lc)
-
-
-# visualize the data distribution
-def visualizeDataDistribution(data_list_train, data_list_test):
-    train_y_values = []
-    train_n0_values = []
-    train_SI_values = []
-    test_y_values = []
-    test_n0_values = []
-    test_SI_values = []
+        pos_data_list.append(data_list)
     
-    for data in data_list_train:
-        train_y_values.append(data.meanDisp[0][3])
-        n0 = torch.tensor(np.array(len(data.x)), dtype=torch.float)
-        train_n0_values.append(n0)
-        SI = np.median(data.x[:,1]/np.sqrt(data.x[:,0]))
-        train_SI_values.append(SI)
+    return pos_data_list
 
-    for data in data_list_test:
-        test_y_values.append(data.meanDisp[0][3])
-        n0 = torch.tensor(np.array(len(data.x)), dtype=torch.float)
-        test_n0_values.append(n0)
-        SI = np.median(data.x[:,1]/np.sqrt(data.x[:,0]))
-        test_SI_values.append(SI)
-    
-    
-    
-    plt.figure(figsize=(6, 3))
-
-    plt.subplot(121)
-    plt.scatter(train_n0_values, train_y_values, s=5, alpha=0.5)
-    plt.scatter(test_n0_values, test_y_values, s=5, alpha=0.5)
-    plt.xlabel('Cell number, n')
-    plt.ylabel('Alpha')
-    plt.legend(['Train', 'Test'])
-
-    plt.subplot(122)
-    plt.scatter(train_SI_values, train_y_values, s=5, alpha=0.5)
-    plt.scatter(test_SI_values, test_y_values, s=5, alpha=0.5)
-    plt.xlabel('Shape index, SI')
-    plt.ylabel('Alpha')
-    plt.legend(['Train', 'Test'])
-
-    plt.tight_layout()
-    plt.show()
-
-    # calculate correlation
-    corr1, p_value = scipy.stats.pearsonr(np.array(train_n0_values),np.array(train_y_values))
-    corr2, p_value = scipy.stats.pearsonr(np.array(train_SI_values),np.array(train_y_values))
-    print(f'Corr n0 (train): {corr1:.4f}, Corr SI (train): {corr2:.4f}')
-
-    corr1, p_value = scipy.stats.pearsonr(np.array(test_n0_values),np.array(test_y_values))
-    corr2, p_value = scipy.stats.pearsonr(np.array(test_SI_values),np.array(test_y_values))
-    print(f'Corr n0 (test): {corr1:.4f}, Corr SI (test): {corr2:.4f}')
-
-visualizeDataDistribution(data_list_train, data_list_test)
+# The full dataset
+data_list_all = MainGetData(directory = "processed", lc=lc)
 
 
-# visualize some representative graphs
+'''
+Visualization
+'''
 def visualizeDataGraph(data_list,ind_lst):
     for i in ind_lst:
         data = data_list[i]
@@ -234,10 +200,8 @@ def visualizeDataGraph(data_list,ind_lst):
         area_lst=data.x[:,0]
         voronoi_polygons = data.voronoi_polygons
 
-        # Figure
+        # plot
         fig, ax = plt.subplots()
-
-        # plt.scatter(points[:, 0], points[:, 1], s=5, label='Cells')
 
         edge_index_t=data.edge_index.T
         for edge in edge_index_t:
@@ -246,20 +210,17 @@ def visualizeDataGraph(data_list,ind_lst):
                      'k:', alpha=0.5)
 
 
-        # Normalize area values for colormap
+        # colormap
         norm = mcolors.Normalize(vmin=min(area_lst), vmax=max(area_lst), clip=True)
         mapper = plt.cm.ScalarMappable(norm=norm, cmap=plt.cm.plasma)
 
         for polygon, area in zip(voronoi_polygons, area_lst):
-            if polygon is not None:  # Check if the polygon is not None
-                x, y = polygon.exterior.xy  # Get the x and y coordinates of the polygon
+            if polygon is not None:
+                x, y = polygon.exterior.xy  # Get the coordinates of polygon vertices
                 ax.fill(x, y, color=mapper.to_rgba(area), edgecolor='white')
 
-        # Add a colorbar
+        #
         plt.colorbar(mapper, ax=ax, orientation='vertical', label='Area')
-
-        # plt.xlim([-100,100])
-        # plt.ylim([-100,100])
         plt.xlabel('X-coordinate')
         plt.ylabel('Y-coordinate')
         # plt.legend()
@@ -267,20 +228,17 @@ def visualizeDataGraph(data_list,ind_lst):
         ax.set_aspect('equal', adjustable='box')
         plt.show()
 
-visualizeDataGraph(data_list_test, np.linspace(0, len(data_list_test)-1, num=10, endpoint=True, dtype=int))
+# visualize
+visualizeDataGraph(data_list_all[0], np.linspace(0, len(data_list_all[0])-1, num=10, endpoint=True, dtype=int))
 
 
-
-
-
-# Uncomment the code below to save data
-
+'''
+Uncomment to save data
+'''
 # import pickle
 # def save_dataset(data_list, file_name):
 #     with open(file_name, 'wb') as f:
 #         pickle.dump(data_list, f)
 
-# TrainSave = "TrainExpData.pkl"
-# TestSave = "TestExpData.pkl"
-# save_dataset(data_list_train, TrainSave)
-# save_dataset(data_list_test, TestSave)
+# savePath = "AllExpData.pkl"
+# save_dataset(data_list_all, savePath)
